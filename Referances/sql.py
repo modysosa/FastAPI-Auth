@@ -1,8 +1,11 @@
 import sqlite3 
 from pathlib import Path
-from fastapi import FastAPI
-from fastapi import HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, Query
+from fastapi import HTTPException, status
+from pydantic import BaseModel, EmailStr, Field
+import bcrypt
+
+
 
 
 app = FastAPI()
@@ -15,13 +18,17 @@ def connect_to_db(db_name):
 # create a table
 def create_table(conn):
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS users
-                      (id INTEGER PRIMARY KEY, name TEXT, email TEXT)''')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL
+)''')
     conn.commit()
 # insert a user into the table
-def insert_user(conn, id, name, email):
+def insert_user(conn, name, email, password):
     cursor = conn.cursor()
-    cursor.execute('''INSERT INTO users (id, name, email) VALUES (?, ?, ?)''', (id, name, email))
+    cursor.execute('''INSERT INTO users (name, email, password) VALUES (?, ?, ?)''', (name, email, password))
     conn.commit()
 # get all users from the table
 def get_all_users(conn):
@@ -49,25 +56,38 @@ class User(BaseModel):
     id: int
     name: str
     email: str
+    password: str
+
+class UserCreate(BaseModel):
+    name: str = Field(..., min_length=3)
+    email: EmailStr
+    password: str = Field(..., min_length=8)    
 
 
 @app.get("/users/")
-def read_users():
+def read_users(order: str = Query("asc")):
     conn = connect_to_db(DB_NAME)
     try:
         create_table(conn)
-        users = get_all_users(conn)
+        cursor = conn.cursor()
+        if order == "desc":
+            cursor.execute("SELECT * FROM users ORDER BY id DESC")
+        else:
+            cursor.execute("SELECT * FROM users ORDER BY id ASC")
+        users = cursor.fetchall()
         return {"users": users}
     finally:
         conn.close()
 
 
-@app.post("/users/")
-def create_user(user: User):
+@app.post("/users/", status_code=status.HTTP_201_CREATED)
+def create_user(user: UserCreate):
     conn = connect_to_db(DB_NAME)
     try:
         create_table(conn)
-        insert_user(conn, user.id, user.name, user.email)
+        # Hash the password before storing it
+        hashed_password = bcrypt.hashpw(user.password.encode('utf-8'), bcrypt.gensalt())
+        insert_user(conn, user.name, user.email, hashed_password)
         return {"message": "User created successfully"}
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="User id already exists")
