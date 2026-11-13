@@ -2,6 +2,7 @@
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-ra"
+markers = ["redis: integration tests requiring TEST_REDIS_URL"]
 
 [tool.ruff]
 target-version = "py312"

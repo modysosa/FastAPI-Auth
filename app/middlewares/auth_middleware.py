@@ -1,6 +1,7 @@
+import jwt
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
-from jose import JWTError, jwt
+from jwt import InvalidTokenError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -22,14 +23,14 @@ def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(
             token,
             settings.secret_key.get_secret_value(),
             algorithms=[settings.algorithm],
-            options={"require_exp": True, "require_sub": True},
+            options={"require": ["exp", "sub"]},
         )
         subject = payload.get("sub")
         if not isinstance(subject, str) or not subject.isascii() or not subject.isdecimal():
             raise credentials_exception
         if len(subject) > 19 or int(subject) < 1 or int(subject) > 2**63 - 1:
             raise credentials_exception
-    except JWTError:
+    except InvalidTokenError:
         raise credentials_exception from None
     user = db.get(UserInDB, int(subject))
     if user is None:

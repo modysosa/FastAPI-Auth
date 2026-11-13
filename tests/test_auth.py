@@ -1,7 +1,7 @@
 from datetime import timedelta
 
+import jwt
 import pytest
-from jose import jwt
 from sqlalchemy import select
 
 from app.core.config import get_settings

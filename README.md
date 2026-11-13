@@ -110,6 +110,50 @@ careful about credentials and personal data.
 Tests migrate isolated temporary databases and use a test signing key. They never
 use the local `dev.db`. CI runs checks on Python 3.12 and 3.14.
 
+Redis integration tests are skipped locally unless `TEST_REDIS_URL` points to a
+test Redis service. They use unique prefixes and short-lived counters without
+flushing the Redis database. CI always runs them against a disposable Redis service:
+
+```powershell
+$env:TEST_REDIS_URL = "redis://localhost:6379/15"
+.\.venv\Scripts\python.exe -m pytest -q -m redis
+```
+
+Run the dependency vulnerability scan with:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip_audit -r requirements-dev.txt --progress-spinner off
+```
+
+## CI and automatic deployment
+
+The single workflow in `.github/workflows/ci.yml` runs for pushes and pull requests:
+
+1. Python 3.12/3.14: lint, formatting, dependency compatibility, migrations and tests.
+2. Dependency security: audit runtime and development dependencies; findings or
+   audit errors fail the job, with no vulnerability exceptions.
+3. Redis integration: check shared budgets across workers, atomic increments,
+   window expiry and HTTP rate limiting against a real Redis service.
+4. Deployment: runs only for a push to `main`, after all three jobs pass. Pull
+   requests and pushes to other branches never deploy. Deployments are serialized.
+5. Readiness: `/health/ready` must return success after the service starts.
+
+Checks use GitHub-hosted runners. Deployment retains the existing self-hosted runner
+labels (`self-hosted`, `Linux`, `X64`, `fastapi-auth`), systemd unit (`fastapi-auth`),
+and server deployment script (`/usr/local/bin/deploy-fastapi-auth`, run as `fastapiapp`).
+The checkout is pinned to the checked commit. The external server script is not
+in this repository: verify that it deploys that checkout/commit, installs the updated
+requirements and runs `alembic upgrade head` before starting the service. A script
+that independently pulls a newer `main` commit could deploy code that has not passed
+this workflow. A failed readiness check marks deployment failed; automated rollback
+and database backup must be provided by your server deployment tooling.
+
+GitHub repository rules should also require the checks before merging into `main`.
+These rules are configured separately in GitHub; changing workflow YAML does not
+enable branch protection. Production secrets remain on the server, outside CI test
+settings. No manual approval is configured: successful checks on `main` deploy
+automatically. The former duplicate deployment workflows were removed.
+
 After changing a SQLAlchemy model:
 
 ```powershell

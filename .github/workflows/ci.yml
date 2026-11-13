@@ -1,24 +1,124 @@
-name: CI
-on: [push, pull_request]
+name: CI/CD
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   check:
+    name: Checks (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.14"]
     env:
       SECRET_KEY: ci-only-secret-key-never-use-in-production-123456
       DATABASE_URL: sqlite:///./ci.db
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - run: python -m pip install -r requirements-dev.txt
-      - run: python -m ruff check .
-      - run: python -m ruff format --check .
-      - run: python -m alembic upgrade head
-      - run: python -m alembic check
-      - run: python -m pytest -q
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Lint
+        run: python -m ruff check .
+      - name: Check formatting
+        run: python -m ruff format --check .
+      - name: Check dependency compatibility
+        run: python -m pip check
+      - name: Apply migrations
+        run: python -m alembic upgrade head
+      - name: Check model and migration consistency
+        run: python -m alembic check
+      - name: Run tests
+        run: python -m pytest -q -m "not redis"
+
+  security:
+    name: Dependency security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Audit runtime and development dependencies
+        run: python -m pip_audit -r requirements-dev.txt --progress-spinner off
+
+  redis:
+    name: Redis integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      SECRET_KEY: ci-only-secret-key-never-use-in-production-123456
+      DATABASE_URL: sqlite:///./ci.db
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Run Redis-backed integration tests
+        run: python -m pytest -q -m redis
+
+  deploy:
+    name: Deploy production
+    needs: [check, security, redis]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, fastapi-auth]
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-fastapi-auth
+      cancel-in-progress: false
+    steps:
+      - name: Download checked code
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Stop application
+        run: sudo -n /usr/bin/systemctl stop fastapi-auth
+      - name: Deploy application
+        run: sudo -n -u fastapiapp /usr/local/bin/deploy-fastapi-auth
+      - name: Start application
+        if: always()
+        run: sudo -n /usr/bin/systemctl start fastapi-auth
+      - name: Check application and database readiness
+        run: |
+          curl --fail --silent --show-error \
+            --retry 10 --retry-delay 3 --retry-connrefused \
+            --max-time 10 \
+            --output /dev/null \
+            http://127.0.0.1:8002/health/ready
