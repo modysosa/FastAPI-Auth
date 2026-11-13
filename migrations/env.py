@@ -24,7 +24,7 @@ def run_migrations_offline():
 def run_migrations_online():
     engine = create_engine(url, poolclass=pool.NullPool, hide_parameters=True)
     try:
-        with engine.connect() as connection:
+        with engine.connect() as connectiowith engine.begin() as connection:n:
             context.configure(
                 connection=connection,
                 target_metadata=target_metadata,
