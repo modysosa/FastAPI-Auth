@@ -1,35 +1,32 @@
-import os
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
-from dotenv import load_dotenv
 from jose import jwt
 
-load_dotenv()
-
-SECRET_KEY = os.getenv("SECRET_KEY", "")
-ALGORITHM = os.getenv("ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+from app.core.config import get_settings
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     try:
         return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
-    except ValueError:
+    except (ValueError, TypeError):
         return False
 
 
 def hash_password(password: str) -> str:
-    salt = bcrypt.gensalt()
-    hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
-    return hashed.decode("utf-8")
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def create_access_token(data: dict, expires_delta: timedelta | None = None) -> str:
-    to_encode = data.copy()
-    if expires_delta:
-        expire = datetime.now(timezone.utc) + expires_delta
-    else:
-        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    expires = now + (
+        expires_delta
+        if expires_delta is not None
+        else timedelta(minutes=settings.access_token_expire_minutes)
+    )
+    return jwt.encode(
+        {"sub": subject, "iat": now, "exp": expires},
+        settings.secret_key.get_secret_value(),
+        algorithm=settings.algorithm,
+    )

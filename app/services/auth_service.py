@@ -1,69 +1,42 @@
-from sqlalchemy import text
+from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.user_model import UserInDB
-from app.utils.security import verify_password
+from app.schemas.user_schema import UserCreate
+from app.utils.security import hash_password, verify_password
+
+DUMMY_HASH = hash_password("unused-dummy-password")
+
+
+class UserAlreadyExistsError(Exception):
+    pass
 
 
 def get_user_by_login(db: Session, login: str) -> UserInDB | None:
-    query = text(
-        """
-        SELECT id, name, email, password, admin
-        FROM users
-        WHERE name = :login OR email = :login
-        LIMIT 1
-        """
-    )
-    row = db.execute(query, {"login": login}).mappings().first()
-    if not row:
-        return None
-
-    return UserInDB(
-        username=row["name"],
-        email=row["email"],
-        hashed_password=row["password"],
-        admin=row["admin"],
-        disabled=False,
+    login = login.strip().lower()
+    return db.scalar(
+        select(UserInDB).where(or_(UserInDB.username == login, UserInDB.email == login))
     )
 
 
-def get_user_by_username(db: Session, username: str) -> UserInDB | None:
-    query = text(
-        """
-        SELECT id, name, email, password, admin
-        FROM users
-        WHERE name = :username
-        LIMIT 1
-        """
-    )
-    row = db.execute(query, {"username": username}).mappings().first()
-    if not row:
-        return None
-
-    return UserInDB(
-        username=row["name"],
-        email=row["email"],
-        hashed_password=row["password"],
-        admin=row["admin"],
-        disabled=False,
-    )
-
-
-def authenticate_user(db: Session, login: str, password: str):
+def authenticate_user(db: Session, login: str, password: str) -> UserInDB | None:
     user = get_user_by_login(db, login)
-    if not user:
-        return False
-    if not verify_password(password, user.hashed_password):
-        return False
-    return user
+    valid = verify_password(password, user.hashed_password if user else DUMMY_HASH)
+    return user if user and valid else None
 
 
-def register_user_in_db(db: Session, username: str, email: str, password: str) -> None:
-    query = text(
-        """
-        INSERT INTO users (name, email, password)
-        VALUES (:name, :email, :password)
-        """
+def register_user_in_db(db: Session, data: UserCreate) -> UserInDB:
+    user = UserInDB(
+        username=data.username,
+        email=str(data.email),
+        hashed_password=hash_password(data.password.get_secret_value()),
     )
-    db.execute(query, {"name": username, "email": email, "password": password})
-    db.commit()
+    db.add(user)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise UserAlreadyExistsError from exc
+    db.refresh(user)
+    return user
